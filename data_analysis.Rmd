@@ -1,0 +1,470 @@
+---
+title: "Project 57 - Financial Literacy Data Analysis"
+subtitle: "A Case Study of Arlington High School, MA"
+author: "Yaxin Zhang - Founder & Executive Director of Project 57"
+output: html_document
+date: "2025-08-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+getwd()
+setwd("C:/Users/user/Downloads")
+
+library(dplyr) 
+library(tidyverse)
+library(janitor)
+library(stringr)
+library(caret)
+library(ggplot2)
+library(waffle) 
+library(scales)
+library(forcats)
+library(FSA)
+library(pwr)
+
+# LOAD IN THE DATASET
+
+pfin <- read.csv("project_57_responses_updated.csv")
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+## DATA PRE-PROCESSING & CLEANING 
+```{r}
+
+#1. COLUMN NAMES 
+
+pfin <- pfin %>% 
+  clean_names() 
+
+#2. Normalize school names (ppl cannot spell)
+pfin <- pfin %>% 
+  mutate( 
+    school_clean = str_trim(what_is_the_name_of_your_high_school) %>% str_to_lower(), 
+    what_is_the_name_of_your_high_school = case_when(
+      school_clean %in% c("arlington high school", "arlington high scho", "hibat allah hade", "arlington heigh school", "arlington high", 
+                          "arlington highschool", "arlington highschool ma", "a", "arlington hs", "ahs", "arlington") ~
+      "Arlington High School", 
+                          TRUE ~ str_to_title(school_clean)
+    )
+  ) %>%
+  select(-school_clean)
+
+#3. Q11 - Multiselect modification 
+pfin <- pfin %>%
+  # 1) Split Q11 into a list of selections
+  mutate(
+    q11_list = str_split(x11_your_monthly_loan_payments_are_based_on, ",\\s*")
+  ) %>%
+  # 2) Collapse each list to the letters only
+  mutate(
+    q11_letters = map_chr(q11_list, ~
+                            str_extract(.x, "^[A-E]") %>% paste(collapse = ",")
+    )
+  ) %>%
+  # 4) Extract the letter for all other x1* questions
+  mutate(across(
+    matches("^x(?:[1-9]|1[0-2])_") & !starts_with("x11_"),  # note the underscore is *after* the group
+    ~ str_extract(., "^[A-E]"),
+    .names = "{.col}_letter"
+  ))  
+
+#4. Select all columns that need grading / modification to letters 
+
+col_map <- c(
+  school            = "what_is_the_name_of_your_high_school",
+  grade             = "what_is_your_grade_level",
+  pfin_instruction  = "have_you_received_any_formal_instruction_related_to_personal_finance_in_school_e_g_budgeting_credit_loans_investing",
+  importance_score  = "x_in_your_opinion_how_important_is_it_for_high_school_students_ages_14_18_to_learn_about_personal_finance",
+  confidence_score  = "how_confident_do_you_feel_in_your_ability_to_make_basic_personal_finance_decisions_e_g_budgeting_saving_understanding_credit",
+  q1  = "x1_what_s_the_most_important_first_step_in_setting_up_a_long_term_financial_plan_letter",
+  q2  = "x2_what_s_a_good_example_of_using_automation_to_manage_your_personal_finances_letter",
+  q3  = "x3_what_is_the_most_responsible_first_move_for_building_your_credit_letter",
+  q4  = "x4_when_you_can_t_pay_off_your_credit_cards_in_full_what_s_the_smartest_strategy_to_reduce_your_debt_long_term_letter",
+  q5  = "x5_if_you_invest_100_a_month_starting_at_age_21_and_earn_7_annually_what_would_your_account_balance_be_at_age_91_letter",
+  q6  = "x6_which_of_these_statements_accurately_reflect_the_risks_associated_with_investing_letter",
+  q7  = "x7_which_metric_best_helps_you_compare_the_cost_vs_benefit_of_college_borrowing_letter",
+  q8  = "x8_what_s_the_most_efficient_method_to_eliminate_student_loan_debt_letter",
+  q9  = "x9_what_consequences_are_likely_to_occur_if_you_default_on_your_student_loans_letter",
+  q10 = "x10_when_reviewing_a_loan_application_lenders_usually_examine_the_following_core_areas_letter",
+  q11 = "q11_letters",
+  q12 = "x12_if_inflation_is_3_what_does_that_mean_for_your_personal_finances_letter"
+)
+
+# rename and select in one go 
+pfin_clean <- pfin %>%
+  # pick & rename by splicing in col_map
+  select(all_of(col_map)) %>%
+  rename_with(~ names(col_map), .cols = everything())
+
+#5. ANSWER KEY 
+
+answer_key <- c( 
+  q1 = "A", 
+  q2 = "B", 
+    q3 = "B", 
+    q4 = "C", 
+    q5 = "C", 
+    q6 = "E", 
+    q7 = "C",
+    q8 = "C", 
+    q9 = "D", 
+    q10 = "B",
+    q11 = "B,D", 
+    q12 = "C"
+  )
+
+#6. GRADE AND TOTAL SCORES
+pfin_clean <- pfin_clean %>%
+  # grade each question
+  mutate(across(
+    all_of(names(answer_key)), 
+    ~ . == answer_key[cur_column()], 
+    .names = "{.col}_correct"
+  )) %>%
+  # sum up the TRUEs (each coerces to 1) into total_score
+  mutate(
+    total_score = rowSums(across(ends_with("_correct")), na.rm = TRUE)
+  )
+
+#7. FINAL CLEANED DATASET 
+
+pfin_final <- pfin_clean %>% 
+  select(school, grade, pfin_instruction, importance_score, confidence_score, 
+         q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, total_score)
+
+```
+
+## EXPLORATORY DATA ANALYSIS & VISUALIZATIONS
+
+```{r echo = FALSE} 
+
+# Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+#1. IMPORTANCE SCORE VS. CONFIDENCE SCORE OVERLAY - DENSITY PROPORTION PLOT 
+
+density_plot <- pfin_clean %>%
+  select(importance_score, confidence_score) %>%
+  pivot_longer(everything(),
+               names_to = "metric",
+               values_to = "score")
+
+ggplot(density_plot, aes(x = score, fill = metric)) +
+  geom_histogram(
+    aes(y = ..density..),    # or y=..count.. if you want counts
+    position = "identity",
+    binwidth = 1,
+    color = "black",
+    size = 0.3,
+    alpha = 0.5
+  ) +
+  scale_fill_manual(
+    name = NULL, 
+    labels = c(
+      confidence_score = "Confidence Score", 
+      importance_score = "Importance Score"
+    ), 
+    values = c(
+      confidence_score = "red", 
+      importance_score = "blue"
+    ), 
+    guide = guide_legend(
+      keywidth = unit(0.8, "lines"), 
+      keyheight = unit(0.8, "lines"), 
+      default.unit = "cm", 
+      label.position = "right", 
+      ncol = 1, 
+      byrow = FALSE, 
+      vjust = 0.5, 
+      direction = "vertical", 
+      title.position = "top"
+    )
+  ) +
+  scale_x_continuous(breaks = 1:5) +
+  scale_y_continuous(breaks = seq(0.0, 0.55, 0.05), expand = expansion(mult = c(0, .05))) +
+  labs(
+    title    = "Financial Knowledge at Arlington High:",
+    subtitle = "Importance vs. Confidence Score Distribution", 
+    x        = "Score (1 = Low, 5 = High)",
+    y        = "Proportion (of Total Surveyed)"
+  ) +
+  # 3) Theme tweaks
+  theme_classic(base_size = 12) +
+  theme(
+    # center the plot title
+    plot.title           = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle        = element_text(hjust = 0.5),
+    
+    # darken & margin the axis text
+    axis.text.x          = element_text(color = "gray20", margin = margin(t = 5)),
+    axis.text.y          = element_text(color = "gray20", margin = margin(r = 5)),
+    
+    # add space between axis titles and ticks
+    axis.title.x         = element_text(margin = margin(t = 10)),
+    axis.title.y         = element_text(margin = margin(r = 10)),
+    
+    # legend inside top right
+    legend.position      = c(0.05, 0.95),
+    legend.justification = c(0, 1),
+    legend.background    = element_rect(fill = alpha("white", 0.7), color = "black"),
+    legend.margin = margin(t=6, r=6, b=6, l=6), 
+    
+    # remove legend title and adjust text size
+    legend.title         = element_blank(),
+    legend.text          = element_text(size = 10)
+  )
+```
+
+```{r echo = FALSE}
+#2. AGE DEMOGRAPHIC BREAKDOWN - WAFFLE PLOT, BY GRADE
+
+# prepare a data.frame for geom_waffle
+df_w <- pfin_final %>%
+  mutate(
+    grade = factor(
+      grade,
+      levels = c("Sophomore (10th)", "Junior (11th)", "Freshman (9th)", "Senior (12th)")
+    )
+  ) %>%
+  count(grade) %>% 
+  # percentage share 
+  mutate ( 
+    pct = n/sum(n), 
+    label_pct = percent(pct, accuracy = 0.01)
+    )
+
+ggplot(df_w, aes(fill = grade, values = n)) +
+  geom_waffle(
+    n_rows   = 17,           # try sqrt(302)≈17, then tweak 
+    size     = 0.25,         # gap between squares
+    colour   = "white"
+  ) +
+  scale_fill_manual(
+    values = c("skyblue","#E45756", "orange","lightgreen"), 
+    labels =paste0(df_w$grade, "\n", df_w$label_pct), 
+    breaks = df_w$grade
+  ) +
+  coord_equal() +            # force square cells
+  labs(
+    title    = "Grade Distribution of Survey Respondents",
+    subtitle = "(Arlington High School)",
+    fill     = NULL
+  ) +
+  theme_void() +
+  theme(
+    # push the entire plot down a bit
+    plot.margin       = margin(t = 20, r = 10, b = 10, l = 10),
+    # center & space out your title/subtitle
+    plot.title        = element_text(
+      size   = 16,
+      face   = "bold",
+      hjust  = 0.5,
+      margin = margin(t = 15, b = 5)
+    ),
+    plot.subtitle     = element_text(
+      size   = 12,
+      hjust  = 0.5,
+      margin = margin(t = 5,  b = 10)
+    ),
+    
+    # legend at bottom, one row, centered
+    legend.position       = "bottom",
+    legend.direction      = "horizontal",
+    legend.justification  = "center",
+    
+    # size of the colored boxes
+    legend.key.width      = unit(0.6, "cm"),
+    legend.key.height     = unit(0.6, "cm"),
+    
+    # space *between* boxes
+    legend.spacing.x      = unit(1.0, "cm"),
+    
+    # left‐align text against the boxes
+    legend.text.align     = 0,
+    legend.text           = element_text(size = 10)
+  ) +
+  guides(fill = guide_legend(
+    nrow       = 1,
+    byrow      = TRUE,
+    label.hjust = 0
+  ))
+
+```
+
+```{r echo= FALSE}
+
+#3. PIE CHART: PROPORTION ACCESS TO FINANCIAL EDUCATION
+
+# 1) Prepare proportions
+pie_data <- pfin_final %>%
+  count(pfin_instruction) %>%
+  mutate(
+    pct   = n / sum(n),
+    label = percent(pct, accuracy = 1)
+  )
+
+# 2) Draw the pie
+ggplot(pie_data, aes(x = 1, y = pct, fill = pfin_instruction)) +
+  geom_col(width = 0.8, color = "black") +        # width < 1 to shrink the circle
+  coord_polar(theta = "y", start = 0) +           # basic pie layout
+  geom_label(
+    aes(label = label),
+    position = position_stack(vjust = 0.5),
+    show.legend = FALSE,
+    size = 4
+  ) +
+  scale_fill_manual(
+    name   = NULL,
+    values = c(
+      "No"      = "firebrick1",
+      "Yes"     = "springgreen", 
+      "Not sure" = "royalblue1"
+    )
+  ) +
+  labs(
+    title    = "Access to Financial Education",
+    subtitle = "What proportion of students at AHS have received some kind of personal finance instruction?"
+  ) +
+  theme_void() +
+  theme(
+    # 2) MOVE legend to the right
+    legend.position    = "right",
+    legend.direction   = "vertical",
+    legend.key.size    = unit(0.6, "cm"),
+    legend.text        = element_text(size = 10),
+    legend.title       = element_text(size = 11),
+    
+    # 3) CENTER titles
+    plot.title         = element_text(hjust = 0.5, size = 16, face = "bold", margin = margin(t=15, b = 5)),
+    plot.subtitle      = element_text(hjust = 0.5, size = 12, margin = margin(t= 5, b = 10)),
+    
+    # 4) SHIFT pie up by giving extra bottom margin
+    plot.margin        = margin(t = 20, r = 30, b = 30, l = 100)
+  )
+```
+
+
+```{r echo=FALSE}
+
+#4. BAR GRAPH - SCORE DISTRIBUTION 
+
+ggplot(pfin_final, aes(x=factor(total_score, levels = as.character(0:12)))) +
+  geom_bar(fill="yellow", color="black", width = 1) +
+  scale_x_discrete(
+    drop = FALSE, 
+    labels = 0:12
+  ) + 
+    scale_y_continuous(
+      breaks = seq(0, 80, 5), expand = c(0,0), limits = c(0,80)) + 
+  labs(
+    title="Financial Literacy Survey at AHS:",
+    subtitle = "Scoring Distribution", 
+    x="Total Score (0–12)",
+    y="Number of Students"
+  ) + theme_classic(base_size = 14) + 
+  theme(
+    axis.title.y = element_text(
+      angle = 90, 
+      hjust = 0.5, 
+      margin = margin(r = 10)
+    ), 
+    axis.line.x      = element_line(color = "black"),
+    axis.line.y      = element_line(color = "black"),
+    # enable ticks and text
+    axis.ticks       = element_line(color = "black"),
+    axis.ticks.length = unit(0.3, "cm"), 
+    axis.text        = element_text(color = "black"),
+    axis.title       = element_text(color = "black", size = 12),
+    plot.margin = margin(t = 20, r = 20, b = 20, l = 20), 
+    plot.title         = element_text(hjust = 0.5, size = 16, face = "bold", margin = margin(t=15, b = 5)), 
+    plot.subtitle = element_text(hjust = 0.5, size = 12, margin = margin(t= 5, b = 20))
+  )
+
+```
+
+
+```{r echo=FALSE}
+#5. QUESTION DIFFICULTY RANKING (TOP 5)
+
+# 1) compute pct_wrong & pull out the top 5
+hard5 <- pfin_clean %>% 
+  select(ends_with("_correct")) %>% 
+  summarise(across(everything(), ~ mean(!.x, na.rm=TRUE))) %>% 
+  pivot_longer(everything(), names_to="question", values_to="pct_wrong") %>% 
+  arrange(desc(pct_wrong)) %>% 
+  slice(1:5) %>% 
+  
+  # 2) create your display labels
+  mutate(
+    q_num = case_when(
+      question=="q11_correct" ~ "Q11",
+      question=="q7_correct"  ~ "Q7" ,
+      question=="q5_correct"  ~ "Q5" ,
+      question=="q3_correct"  ~ "Q3" ,
+      question=="q4_correct"  ~ "Q4"
+    ),
+    q_text = case_when(
+      question=="q11_correct" ~ "Loan Interest Basis",
+      question=="q7_correct"  ~ "College-Cost Metric",
+      question=="q5_correct"  ~ "Future Balance",
+      question=="q3_correct"  ~ "Credit Move",
+      question=="q4_correct"  ~ "Credit-Card Strategy"
+    )) %>% 
+  mutate(
+    q_num = fct_reorder(q_num, pct_wrong)) # not ordering (asc)
+  
+bar_cols <- c(
+  Q11="#A80000", Q7="#E69F00", Q5="#56B4E9", Q3="#009E73", Q4="#F0E442"
+)
+
+ggplot(hard5, aes(x=pct_wrong, y=q_num, fill=q_num)) +
+  # your horizontal bars
+  geom_col(width=1, color = "black", show.legend=FALSE) +
+  
+  # long question text centered in the bar
+  geom_text(aes(label=q_text), 
+            x = hard5$pct_wrong/2, 
+            color="white", 
+            size=3.5, 
+            hjust=0.5) +
+  
+  # percent label at the end of each bar
+  geom_text(aes(label = percent(pct_wrong, accuracy=0.1)), 
+            x    = hard5$pct_wrong, 
+            color="black", 
+            size = 3.5, 
+            angle = -90, 
+            vjust = -0.5, 
+            hjust = 0.5) +
+  
+  scale_x_continuous(expand = c(0,0), limits = c(0, max(hard5$pct_wrong)*1.05)) +
+  
+  scale_fill_manual(values=bar_cols) +
+  
+  labs(
+    title = "Top 5 Hardest Questions (By Percentage Incorrect)",
+    x     = NULL, 
+    y     = NULL
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    axis.line.x   = element_blank(),
+    axis.ticks.x  = element_blank(),
+    axis.text.x   = element_blank(),
+    
+    axis.line.y   = element_line(color = "black"),
+    axis.ticks.y  = element_blank(),
+    axis.text.y   = element_text(face = "bold", size = 10, color = "black"),
+    
+    panel.grid    = element_blank(),
+    plot.margin   = margin(20,30,20,30),
+    
+    plot.title    = element_text(hjust = 0.5, face = "bold", size = 14)
+  )
+
+```
