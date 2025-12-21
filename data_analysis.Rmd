@@ -42,20 +42,7 @@ When you click the **Knit** button a document will be generated that includes bo
 pfin <- pfin %>% 
   clean_names() 
 
-#2. Normalize school names (ppl cannot spell)
-pfin <- pfin %>% 
-  mutate( 
-    school_clean = str_trim(what_is_the_name_of_your_high_school) %>% str_to_lower(), 
-    what_is_the_name_of_your_high_school = case_when(
-      school_clean %in% c("arlington high school", "arlington high scho", "hibat allah hade", "arlington heigh school", "arlington high", 
-                          "arlington highschool", "arlington highschool ma", "a", "arlington hs", "ahs", "arlington") ~
-      "Arlington High School", 
-                          TRUE ~ str_to_title(school_clean)
-    )
-  ) %>%
-  select(-school_clean)
-
-#3. Q11 - Multiselect modification 
+#2. Q11 - Multiselect modification 
 pfin <- pfin %>%
   # 1) Split Q11 into a list of selections
   mutate(
@@ -67,7 +54,7 @@ pfin <- pfin %>%
                             str_extract(.x, "^[A-E]") %>% paste(collapse = ",")
     )
   ) %>%
-  # 4) Extract the letter for all other x1* questions
+#3. Extract the letter for all other x1* questions
   mutate(across(
     matches("^x(?:[1-9]|1[0-2])_") & !starts_with("x11_"),  # note the underscore is *after* the group
     ~ str_extract(., "^[A-E]"),
@@ -466,6 +453,5 @@ ggplot(hard5, aes(x=pct_wrong, y=q_num, fill=q_num)) +
     
     plot.title    = element_text(hjust = 0.5, face = "bold", size = 14)
   )
-
 
 ```
