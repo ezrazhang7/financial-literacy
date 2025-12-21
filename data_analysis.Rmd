@@ -25,7 +25,7 @@ library(pwr)
 
 # LOAD IN THE DATASET
 
-pfin <- read.csv("project_57_responses_updated.csv")
+pfin <- read.csv("financial_literacy_responses.csv")
 ```
 
 ## R Markdown
@@ -466,5 +466,6 @@ ggplot(hard5, aes(x=pct_wrong, y=q_num, fill=q_num)) +
     
     plot.title    = element_text(hjust = 0.5, face = "bold", size = 14)
   )
+
 
 ```
