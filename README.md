@@ -42,10 +42,13 @@ To reproduce the analysis:
 1) Download or clone this repository.
 2) Open data_analysis.Rmd in RStudio.
 3) Ensure the following packages are installed:
-- tidyverse
-- ggplot2
-- dplyr
-- readr
+- tidyverse (incl. ggplot2, dplyr, readr, stringr, forcats)
+- janitor
+- caret
+- waffle
+- scales
+- FSA
+- pwr
 - knitr
 
 4) Knit the R Markdown file to generate figures and summary statistics.
